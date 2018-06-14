@@ -1,0 +1,221 @@
+---
+title: "R illustration: Gravity model of network flow"
+author: "Ben Soibam"
+output: html_document
+---
+
+This document illustrates how to estimate a gravity model for network flow data.
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Load the libraries
+```{r cars}
+suppressMessages(library(igraph))
+```
+
+Data for phone-call traffic among 32 Austrian districts in 1991
+
+* 32 x 31 = 992 flow measurements $z_{ij}$, $i \ne j=1, .... 32$,
+* Gross regional product (GRP) per region. This will represent population size of a node.
+* Road-based distance among regions. This will represent separation between two nodes.
+```{r,fig.align='center'}
+calldata <- read.table('phonecall.csv',sep=',',header=T)
+head(calldata)
+```
+
+* DistRd = separation between two nodes.
+* DistEuc = separation based on actual spatial distance.
+* Orig = origin node, Dest = destination node.
+* Flow = $z_{ij}$, (i.e., number of phone calls, including faxes, times the average length of the call divided by the duration of the measurement period).
+* O.GRP = GRP of origin node.
+* D.GRP = GRP of destination node.
+
+
+The gravity modeling frameworks we will describe assume units of counts, we convert these data to quasi-counts.
+```{r}
+min.call <- min(calldata$Flow)
+calldata$FlowCnt <- round(5 * calldata$Flow / min.call)
+```
+
+
+#Visualize the network flow data. Note that it is not the actual network.
+```{r}
+d <- calldata
+g.cd <- graph_from_data_frame(d, directed = TRUE)
+E(g.cd)$weight <- d$FlowCnt
+in.flow <- graph.strength(g.cd, mode="in")
+out.flow <- graph.strength(g.cd, mode="out")
+#node size depends on inflow + outflow
+vsize <- sqrt(in.flow + out.flow) / 100
+#pie chart on each indicating inflow and outflow separately
+pie.vals <- lapply((1:vcount(g.cd)), function(i) c(in.flow[i], out.flow[i]))
+#edge width indicates the amount of flow 
+ewidth <- E(g.cd)$weight / (10^5)
+plot(g.cd, vertex.size=vsize, vertex.shape="pie",vertex.pie=pie.vals,edge.width=ewidth, edge.arrow.size=0.1,layout=layout.circle,label.dist=1)
+```
+
+#Data exploration - log scale
+```{r}
+calldata$lFlowCnt <- log(calldata$FlowCnt, 10)
+calldata$lO.GRP <- log(calldata$O.GRP, 10)
+calldata$lD.GRP <- log(calldata$D.GRP, 10)
+calldata$lDistRd <- log(calldata$DistRd, 10)
+
+library(car)
+scatterplotMatrix( ~ lFlowCnt + lO.GRP + lD.GRP +lDistRd, data=calldata)
+```
+
+The plots indicate that log(FlowCnt) has the form of $log(FlowCnt) = log(\gamma) + \alpha \ log(O.GRP) +  \beta \ log(D.GRP) + \theta  \ log(DistRd)$. This is a linear regression model and we need to estimate the unknowns $\alpha, \beta, \theta, \gamma$.
+
+
+#Modeling
+```{r}
+#In the standard model, treat the population sizes of the nodes as known.
+formula.s <- FlowCnt ~ lO.GRP + lD.GRP + lDistRd
+
+#In the genral model, treat the population sizes of the nodes as unknowns.
+formula.g <- FlowCnt ~ Orig + Dest + lDistRd
+
+gm.s <- glm(formula.s, family="poisson", data=calldata)
+gm.g <- glm(formula.g, family="poisson", data=calldata)
+
+summary(gm.s)
+summary(gm.g)
+```
+
+Use Akaike information criterion (AIC) statistic to measure better model. The AIC statistic for a likelihood-based model, with k-dimensional parameters, is defined as $AIC = −2log(L)+2k$, where $L$ is the log-likelihood, $k$ is the number of unknowns in the model. The smaller the value of AIC, better the model is. The General model is far better that than the standard model.
+```{r}
+#aic of general model
+gm.g$aic
+#aic of standard model
+gm.s$aic
+```
+
+
+#Predicted vs observed flows from the general model
+```{r}
+plot(calldata$lFlowCnt, log(gm.g$fitted.values,10),
+     cex.lab=1.5,
+     xlab=expression(Log[10](paste("Flow Volume"))),
+     col="green", cex.axis=1.5, ylab="", ylim=c(2, 5.75))
+mtext(expression(Log[10](paste("Fitted Value"))), 2,
+      outer=T, cex=1.5, padj=1)
+abline(0, 1, lwd=2, col="darkgoldenrod1")
+#correlation between observed and predicted
+cor(calldata$lFlowCnt,log(gm.g$fitted.values,10))
+```
+
+#Relative errors from prediction using the general model
+Lets look at relative errors $\frac{z_{ij} −z_{ij}^{predicted}}{z_{ij}}$ against the flow volumes $z_{ij}$. The comparison is again on a log-log scale. For the relative errors, the logarithm is applied to the absolute value, and then the sign of the error is reintroduced through the use of two shades of color.
+
+```{r}
+res <- residuals.glm(gm.g, type="response")
+relres <- res/calldata$FlowCnt
+lrelres <- log(abs(relres), 10)
+res.sgn <- (relres>=0)
+
+plot(calldata$lFlowCnt[res.sgn], lrelres[res.sgn],
+   xlim=c(0.5, 5.75), ylim=c(-3.5, 3.5),
+    xlab=expression(Log[10](paste("Flow Volume"))),
+    cex.lab=1.5, cex.axis=1.5, ylab="", col="lightgreen")
+
+mtext(expression(Log[10](paste("Relative Error"))), 2,
+  outer=T, cex=1.5, padj=1)
+
+
+par(new=T)
+plot(calldata$lFlowCnt[!res.sgn], lrelres[!res.sgn],
+    xlim=c(0.5, 5.75), ylim=c(-3.5, 3.5),
+    xlab=expression(Log[10](paste("Flow Volume"))),
+   cex.lab=1.5, cex.axis=1.5, ylab="", col="darkgreen")
+
+mtext(expression(Log[10](paste("Relative Error"))), 2,
+   outer=T, cex=1.5, padj=1)
+abline(h=0, lwd=2, col="darkgoldenrod2")
+```
+
+Plot the cummulative density to see how the errors are distributed.
+```{r}
+plot(ecdf(lrelres))
+par(new=T)
+abline(v=0, lwd=2, col="darkgoldenrod1")
+abline(v=1,  lwd=2, col="darkgoldenrod1")
+abline(v=0.7, lwd=2, col="darkgoldenrod1")
+```
+
+We see that the relative error varies widely in magnitude. A large proportion of the
+flows are estimated with an error on the order of $z_{ij}$ or less (i.e., the logarithm of
+relative error is less than zero), also some are estimated with an error
+on the order of up to ten times $z_{ij}$, and a few others are even worse. In addition, we
+can see that, roughly speaking, the relative error decreases with volume. Finally, it
+is clear that for low volumes the model is inclined to over-estimate, while for higher
+volumes, it is increasingly inclined to under-estimate.
+
+About 72% of OD pairs have errors < $z_{ij}$ in the general model.
+```{r}
+100*sum(lrelres  < 0)/length(lrelres)
+```
+
+
+#Predicted vs observed flows from the standard model
+
+```{r}
+plot(calldata$lFlowCnt, log(gm.s$fitted.values,10),
+     cex.lab=1.5,
+     xlab=expression(Log[10](paste("Flow Volume"))),
+     col="green", cex.axis=1.5, ylab="", ylim=c(2, 5.75))
+mtext(expression(Log[10](paste("Fitted Value"))), 2,
+      outer=T, cex=1.5, padj=1)
+abline(0, 1, lwd=2, col="darkgoldenrod1")
+#correlation between observed and predicted
+cor(calldata$lFlowCnt,log(gm.s$fitted.values,10))
+res <- residuals.glm(gm.s, type="response")
+relres <- res/calldata$FlowCnt
+lrelres <- log(abs(relres), 10)
+```
+Fairly linear relationship between predcicted and observed. Model overestimates for lower flow count data.
+
+#Relative errors from prediction using the specific model
+
+```{r}
+res <- residuals.glm(gm.s, type="response")
+relres <- res/calldata$FlowCnt
+lrelres <- log(abs(relres), 10)
+res.sgn <- (relres>=0)
+
+plot(calldata$lFlowCnt[res.sgn], lrelres[res.sgn],
+   xlim=c(0.5, 5.75), ylim=c(-3.5, 3.5),
+    xlab=expression(Log[10](paste("Flow Volume"))),
+    cex.lab=1.5, cex.axis=1.5, ylab="", col="lightgreen")
+
+mtext(expression(Log[10](paste("Relative Error"))), 2,
+  outer=T, cex=1.5, padj=1)
+
+
+par(new=T)
+plot(calldata$lFlowCnt[!res.sgn], lrelres[!res.sgn],
+    xlim=c(0.5, 5.75), ylim=c(-3.5, 3.5),
+    xlab=expression(Log[10](paste("Flow Volume"))),
+   cex.lab=1.5, cex.axis=1.5, ylab="", col="darkgreen")
+
+mtext(expression(Log[10](paste("Relative Error"))), 2,
+   outer=T, cex=1.5, padj=1)
+abline(h=0, lwd=2, col="darkgoldenrod2")
+```
+
+About 58% of OD pairs have errors < $z_{ij}$ in the standard model.
+```{r}
+100*sum(lrelres  < 0)/length(lrelres)
+```
+
+Plot the cummulative density to see how the errors are distributed.
+```{r}
+plot(ecdf(lrelres),xlab='flow',ylab='relative error')
+par(new=T)
+abline(v=0, lwd=2, col="darkgoldenrod1")
+abline(v=1,  lwd=2, col="darkgoldenrod1")
+abline(v=0.7, lwd=2, col="darkgoldenrod1")
+```
+

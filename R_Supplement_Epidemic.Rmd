@@ -1,0 +1,352 @@
+---
+title: "R illustration: Epidemic models and immunization in a network"
+author: "Ben Soibam"
+output: pdf_document
+---
+
+This document illustrates how to use R to simulate epidemic spread in a network.
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+You will need three R packages. iGraph has features to perform the epidemic modeling on a network, but it has limited features.We will use another package called "EpiModel" for the epidemic modeling. epimodel is available here http://www.epimodel.org.
+
+Load the libraries
+```{r cars}
+suppressMessages(library(igraph))
+suppressMessages(library(ggplot2))
+suppressMessages(library(EpiModel))
+
+```
+
+Load some example networks using in igraph
+```{r,fig.align='center'}
+facebook_small <- read_graph("facebook_combined.txt",format="edgelist",directed=FALSE)
+power_grid <- read_graph("power.gml",format="gml")
+airlines <- read_graph("airlines.graphml",format="graphml")
+internet_small <- read_graph("p2p-Gnutella09.txt",format="edgelist",directed=FALSE)
+#fit_power_law(degree(facebook_small)) 
+#fit_power_law(degree(power_grid))
+#fit_power_law(degree(airlines)) 
+```
+
+
+This function converts an igraph object network to acceptable network object for package EpiModel. The Epimodel package
+accepts network in the form of a networkDynamic object. 
+https://cran.r-project.org/web/packages/networkDynamic/networkDynamic.pdf
+```{r,fig.align='center'}
+iGraph2EpiModel <- function(g)
+{
+  #assumes that igraph and EpiModel have been loaded
+  gd <- as.data.frame(igraph::get.edgelist(g))
+  nw <- network::network.initialize(n=vcount(g),directed=FALSE)
+  network::add.edges(nw, gd[,1],gd[,2])
+  return(nw)
+}
+```
+
+
+Function to perform SI epidemic model on network
+```{r}
+#g:network
+#inf.prob: infection rate
+#infected: a vector of node indices which are infected at t =0
+#nsteps: number of iterations or time to stop the simulation
+#nsims: number of simulations. Note that the spread is not a deterministic process. 
+#       The process should be simiulated multiple times to get the "average" of 
+#        how the epidemic spreads.
+SI<- function(g,inf.prob,Infected,nsteps,nsims)
+{
+  param <- param.net(inf.prob = inf.prob)
+  status.vector <- rep("s",length(g$val))
+  status.vector[Infected] <- "i"
+  #print(status.vector)
+  init <- init.net(status.vector = status.vector)
+  #init <- init.net(i.num = 10)
+  control <- control.net(type = "SI", nsteps = nsteps, nsims = nsims,verbose.int=0)
+  
+  formation <- ~edges
+  target.stats <- length(g$val)
+  coef.diss <- dissolution_coefs(dissolution = ~offset(edges), duration = 1)
+  est1 <- netest(g, formation, target.stats, coef.diss, verbose = FALSE)
+  #sim1 <- netsim(est1, param, init, control)
+  sim1 <- netsim(est1, param, init, control)
+  return(sim1)
+}
+```
+
+Function to perform SIR epidemic model on network
+```{r}
+#g:network
+#inf.prob: infection rate
+#infected: a vector of node indices which are infected at t =0
+#nsteps: number of iterations or time to stop the simulation
+#nsims: number of simulations. Note that the spread is not a deterministic process. 
+#       The process should be simiulated multiple times to get the "average" 
+#       of how the epidemic spreads.
+#The recovery rate is the reciprocal of the disease duration. 
+SIR<- function(g,inf.prob,rec.rate,Infected,nsteps,nsims)
+{
+  param <- param.net(inf.prob = inf.prob,rec.rate = rec.rate)
+  status.vector <- rep("s",length(g$val))
+  status.vector[Infected] <- "i"
+  #print(status.vector)
+  init <- init.net(status.vector = status.vector)
+  #init <- init.net(i.num = 10)
+  control <- control.net(type = "SIR", nsteps = nsteps, nsims = nsims,verbose.int=0)
+  formation <- ~edges
+  target.stats <- length(g$val)
+  coef.diss <- dissolution_coefs(dissolution = ~offset(edges), duration = 1)
+  est1 <- netest(g, formation, target.stats, coef.diss, verbose = FALSE)
+  #sim1 <- netsim(est1, param, init, control)
+  sim1 <- netsim(est1, param, init, control)
+  return(sim1)
+}
+```
+
+
+Function to perform SIS epidemic model on network
+```{r}
+#g:network
+#inf.prob: infection rate
+#infected: a vector of node indices which are infected at t =0
+#nsteps: number of iterations or time to stop the simulation
+#nsims: number of simulations. Note that the spread is not a deterministic process. 
+#       The process should be simiulated multiple times to get the "average" of 
+#        how the epidemic spreads.
+#The recovery rate is the reciprocal of the disease duration.
+SIS<- function(g,inf.prob,rec.rate,Infected,nsteps,nsims)
+{
+  param <- param.net(inf.prob = inf.prob,rec.rate = rec.rate)
+  status.vector <- rep("s",length(g$val))
+  status.vector[Infected] <- "i"
+  #print(status.vector)
+  init <- init.net(status.vector = status.vector)
+  #init <- init.net(i.num = 10)
+  control <- control.net(type = "SIS", nsteps = nsteps, nsims = nsims,verbose.int=0)
+  formation <- ~edges
+  target.stats <- length(g$val)
+  coef.diss <- dissolution_coefs(dissolution = ~offset(edges), duration = 1)
+  est1 <- netest(g, formation, target.stats, coef.diss, verbose = FALSE)
+  #sim1 <- netsim(est1, param, init, control)
+  sim1 <- netsim(est1, param, init, control)
+  return(sim1)
+}
+```
+
+#SI model
+Let's perform some SI model epidemic. At t =0, infect a node with high degree. Observe how the epidemic spreads in the network.
+```{r}
+#convert igraph network to network object to be used by Epimodel
+airlines_nw <- iGraph2EpiModel(airlines)
+#node 51 has high degree
+degree(airlines)[51]
+vertex_attr(airlines)$tooltip[51]
+#node 223 has low degree
+degree(airlines)[223]
+vertex_attr(airlines)$tooltip[233]
+#make node 51 as infected at t = 0 and perform SI model 5 times, each simulation for 50 time steps.
+airlines_si1 <- SI(airlines_nw,0.1,c(51),50,5)
+```
+
+#Summaries
+Printing the model output lists the inputs and outputs of the model.
+```{r}
+airlines_si1
+```
+Epidemic statistics may be obtained using the summary function. This summary shows the mean and standard deviation of simulations at time step 500.
+```{r}
+summary(airlines_si1, at = 10)
+```
+#Extraction
+Means, standard deviations, and individual simulation run data is easily extracted using the as.data.frame function.
+```{r}
+airlines_si1_d <- (as.data.frame(airlines_si1))
+head(airlines_si1_d)
+```
+The default as before is to output the means, but here we show how to extract the model values from the second simulation.
+
+```{r}
+airlines_si1_d <- (as.data.frame(airlines_si1,out = "vals", sim = 2))
+head(airlines_si1_d)
+```
+The simulated networkDynamic objects with type-specific partnership and disease infection status information are stored under the network list in the main model object. They may be extracted and stored to an external object for further analysis. This is accomplished with the get_network function, specifying the simulation number.
+```{r}
+nw <- get_network(airlines_si1, sim = 1)
+```
+A matrix is stored that records some key details about each transmission event that occurred. The sus column shows the unique ID of the previously susceptible, newly infected node in the event. The inf column shows the ID of the transmitting node. The other columns show the duration of the transmitting node’s infection at the time of transmission, the per-act transmission probability, act rate during the transmission, and final per-partnership transmission rate (which is the per-act probability raised to the number of acts).
+```{r}
+transmat <- get_transmat(airlines_si1, sim = 1)
+head(transmat)
+```
+Match node ids from the actual igraph network. The sus_node column shows the unique ID of the previously susceptible, newly infected node in the event. The inf_node column shows the ID of the transmitting node.
+```{r}
+vertex.pids <- network::get.vertex.attribute(nw,'vertex.pid')
+transmat$sus_node <- match(transmat$sus, vertex.pids)
+transmat$inf_node <- match(transmat$inf, vertex.pids)
+head(transmat)
+```
+
+#Plotting
+```{r}
+#plot only the average across simulation
+plot(airlines_si1,mean.line = TRUE, qnts = FALSE, sim.lines = FALSE)
+#plot the average across simulation, also indicate how it varies across the different simulations.
+plot(airlines_si1,mean.line = TRUE, qnts = TRUE, sim.lines = FALSE)
+```
+
+#Changing model parameters
+Let's perform SI model epidemic in different ways:  Observe how the epidemic spreads in the network for low and high infection rate. Epidemic spreads faster with increase in infection rate. Also, the "randomness" decreases with increase in infection rate.
+```{r}
+#use different infection rates
+#make node 51 as infected at t = 0 and perform SI model 5 times, each simulation for 50 time steps.
+airlines_si1 <- SI(airlines_nw,0.1,c(51),50,5)
+airlines_si2 <- SI(airlines_nw,0.2,c(51),50,5)
+airlines_si3 <- SI(airlines_nw,0.3,c(51),50,5)
+airlines_si4 <- SI(airlines_nw,0.5,c(51),50,5)
+
+#visualize how the epidemic spread to the network for the above four scenarios.
+par(mfrow=c(1,2))
+plot(airlines_si1,main="inf rate = 0.1",mean.line = TRUE, qnts = TRUE, sim.lines = FALSE)
+plot(airlines_si2,main="inf rate = 0.2",mean.line = TRUE, qnts = TRUE, sim.lines = FALSE)
+par(mfrow=c(1,2))
+plot(airlines_si3,main="inf rate = 0.3",mean.line = TRUE, qnts = TRUE, sim.lines = FALSE)
+plot(airlines_si4,main="inf rate = 0.5",mean.line = TRUE, qnts = TRUE, sim.lines = FALSE)
+```
+
+#SIR model
+We will need infection rate and recovery rate. In R package Epimodel, the recovery rate is implemented as the reciprocal of the disease duration. Notice the peak time under each condition. Peak time is the time when there is highest number of infected nodes. It occurs faster when infection rate >> recovery rate. Peak time may be an important metric to track in some conditions.
+```{r}
+#infection rate
+beta = 0.5
+#recovery rate (10 time steps)
+gamma = 0.1
+airlines_sir1 <- SIR(airlines_nw,beta,gamma,c(51),50,5)
+airlines_sir2 <- SIR(airlines_nw,0.1,0.1,c(51),50,5)
+airlines_sir3 <- SIR(airlines_nw,0.1,0.05,c(51),50,5)
+airlines_sir4 <- SIR(airlines_nw,0.2,0.1,c(51),50,5)
+```
+
+plot the results of the above four SIRs
+```{r}
+par(mfrow=c(1,2))
+plot(airlines_sir1,main="inf= 0.5, rec=0.1",mean.line = TRUE, qnts = FALSE, sim.lines = FALSE)
+plot(airlines_sir2,main="inf= 0.1, rec=0.1",mean.line = TRUE, qnts = FALSE, sim.lines = FALSE)
+par(mfrow=c(1,2))
+plot(airlines_sir3,main="inf= 0.1, rec=0.05",mean.line = TRUE, qnts = FALSE, sim.lines = FALSE)
+plot(airlines_sir4,main="inf= 0.2, rec=0.1",mean.line = TRUE, qnts = FALSE, sim.lines = FALSE)
+```
+
+#SIS model
+We will need infection rate and recovery rate. In R package Epimodel, the recovery rate is implemented as the reciprocal of the disease duration.
+For infection rate >> recovery rate, every node becomes infected. There might also be a case, when there is some equilibrium between the number of infected and number the recovered nodes. Because in SIS model, after recovering, you can still get infected. Most likely such equilibrium is not possible in SIR model.
+```{r}
+#infection rate
+beta = 0.5
+#recovery rate (10 time steps)
+gamma = 0.1
+airlines_sis1 <- SIS(airlines_nw,beta,gamma,c(51),50,5)
+airlines_sis2 <- SIS(airlines_nw,0.1,0.1,c(51),50,5)
+airlines_sis3 <- SIS(airlines_nw,0.1,0.05,c(51),50,5)
+airlines_sis4 <- SIS(airlines_nw,0.2,0.1,c(51),50,5)
+```
+
+plot the results of the above four SIS
+```{r}
+par(mfrow=c(1,2))
+plot(airlines_sis1,main="inf= 0.5, rec=0.1",mean.line = TRUE, qnts = FALSE, sim.lines = FALSE)
+plot(airlines_sis2,main="inf= 0.1, rec=0.1",mean.line = TRUE, qnts = FALSE, sim.lines = FALSE)
+par(mfrow=c(1,2))
+plot(airlines_sis3,main="inf= 0.1, rec=0.05",mean.line = TRUE, qnts = FALSE, sim.lines = FALSE)
+plot(airlines_sis4,main="inf= 0.2, rec=0.1",mean.line = TRUE, qnts = FALSE, sim.lines = FALSE)
+```
+
+#Immunization or vaccination strategies
+The main purpose of immunization is to protect the immunized node. It also reduces the speed at which the infection spreads in the network. The immunized nodes are "invisible" to the disease. There are two ways of immunization techniques: random and selective.
+
+##Random immunization
+Randomly remove (immunize/vaccinate) a set of nodes from the igraph network 
+```{r}
+#immunize randomly 5% of the nodes
+remove <- sample(c(1:vcount(airlines)),0.05*vcount(airlines))
+airlines_immu <- igraph::delete.vertices(airlines,remove)
+#ids of removed nodes
+V(airlines)$id[remove]
+#degree of removed nodes
+degree(airlines)[remove]
+#ids in original network
+V(airlines)$id
+#ids after nodes removed
+V(airlines_immu)$id
+```
+
+
+# Compare SIS model on randomly immunized network and non-immunized network
+```{r}
+#original network
+airlines_nw <- iGraph2EpiModel(airlines)
+#randomly immunized network
+airlines_immu_nw <- iGraph2EpiModel(airlines_immu)
+#infection rate
+beta = 0.5
+#recovery rate (10 time steps)
+gamma = 0.1
+
+#SIS on non-immunized network
+#node with highest degree in original network
+index1 <- which(degree(airlines) %in% max(degree(airlines)))
+#infect node with highest degree in original network
+airlines_sis1 <- SIS(airlines_nw,beta,gamma,c(index1),50,5)
+
+
+#SIS on randomly immunized network
+#node with highest degree in randomly-immunized network
+index2 <- which(degree(airlines_immu) %in% max(degree(airlines_immu)))
+#infect node with highest degree
+airlines_immu_sis1 <- SIS(airlines_immu_nw,0.5,0.1,c(index2),50,5)
+
+```
+
+Extract the results as data frame and compare the infected numbers from the two results.
+```{r}
+airlines_sis1_d <- as.data.frame(airlines_sis1)
+airlines_immu_sis1_d <- as.data.frame(airlines_immu_sis1)
+
+airlines_sis1_d$type <- "non-immunized"
+airlines_immu_sis1_d$type <- "random-immunized"
+data <- rbind(airlines_sis1_d,airlines_immu_sis1_d)
+ggplot(data=data) + geom_line(aes(x=time,y=i.num,color=type),size=1.5) +
+  ggtitle("SIS, beta=0.5,gamma=0.1") 
+```
+
+##Selective immunization
+Remove (immunize/vaccinate) a set of nodes with high degree from the igraph network 
+```{r}
+#explore which nodes to immunize
+test <- sort(degree(airlines),decreasing=TRUE,index.return = TRUE)
+#degree in descending order
+test$x[1:15]
+#first 15 nodes with highest degree
+test$ix[1:15]
+
+#You will infect a node with high degree. Let's remove (immunize) top 5 nodes with highest degree except node to be infected.
+remove <-c(137,81,131,71,155)
+airlines_immu_sel <- igraph::delete.vertices(airlines,remove)
+airlines_immu_sel_nw <- iGraph2EpiModel(airlines_immu_sel)
+
+#infect node with highest degree in selective immunized network
+index3 <- which(degree(airlines_immu_sel) %in% max(degree(airlines_immu_sel)))
+airlines_immu_sel_sis1 <- SIS(airlines_immu_sel_nw,0.5,0.1,c(index3),50,5)
+```
+
+Extract the results as data frame and compare the infected numbers with non-immunized and random-immunization. The selective immunization is the most effective.
+```{r}
+airlines_immu_sel_sis1_d <- as.data.frame(airlines_immu_sel_sis1)
+airlines_sis1_d$type <- "non-immunized"
+airlines_immu_sis1_d$type <- "random-immunized"
+airlines_immu_sel_sis1_d$type <- "selective-immunized"
+data <- rbind(airlines_sis1_d,airlines_immu_sis1_d,airlines_immu_sel_sis1_d)
+ggplot(data=data) + geom_line(aes(x=time,y=i.num,color=type),size=1.5) +
+  ggtitle("SIS, beta=0.5,gamma=0.1") 
+```
+
