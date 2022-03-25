@@ -1,7 +1,5 @@
 ---
-title: "R illustration: Gravity model of network flow"
-author: "Ben Soibam"
-output: html_document
+
 ---
 
 This document illustrates how to estimate a gravity model for network flow data.
